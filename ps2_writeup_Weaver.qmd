@@ -1,0 +1,216 @@
+---
+title: "Problem Set 2"
+author: "Alexis Weaver"
+date: today
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+**GitHub repo**
+<https://github.com/Alexiswea/ec422_ps2_Weaver.git>
+---
+
+```{r}
+library(tidyquant)
+library(tidyverse)
+library(knitr)
+unemp_raw = read_rds("data/unemp_raw.rds")
+
+#| label: wrangle
+unemp <- unemp_raw |>
+  rename(unemployment_rate = price) |>
+  mutate(
+    region = case_when(
+      symbol == "UNRATE" ~ "United States",
+      symbol == "ORUR"   ~ "Oregon",
+      symbol == "CAUR"   ~ "California",
+      symbol == "TXUR"   ~ "Texas",
+      symbol == "NYUR"   ~ "New York",
+      TRUE ~ NA_character_
+    )
+  )
+
+#Replace the missing Oct 2025 value with the Sept 2025 value
+unemp <- unemp |>
+  arrange(region, date) |>
+  group_by(region) |>
+  mutate(
+    unemployment_rate = replace(
+      unemployment_rate,
+      date == as.Date("2025-10-01"),
+      unemployment_rate[date == as.Date("2025-09-01")]
+    )
+  ) |>
+  ungroup()
+
+# month-over-month change, computed within each region
+unemp <- unemp |>
+  arrange(region, date) |>
+  group_by(region) |>
+  mutate(unemployment_rate_change = unemployment_rate - lag(unemployment_rate)) |>
+  ungroup()
+
+unemp_recent <- unemp |>
+  filter(date >= as.Date("2015-01-01"))
+
+unemp_summary <- unemp |>
+  group_by(region) |>
+  summarize(
+    mean_rate = mean(unemployment_rate, na.rm = TRUE),
+    min_rate  = min(unemployment_rate,  na.rm = TRUE),
+    max_rate  = max(unemployment_rate,  na.rm = TRUE)
+  )
+
+unemp_recent_summary <- unemp_recent |>
+  group_by(region) |>
+  summarize(
+    mean_rate = mean(unemployment_rate, na.rm = TRUE),
+    min_rate  = min(unemployment_rate,  na.rm = TRUE),
+    max_rate  = max(unemployment_rate,  na.rm = TRUE)
+  )
+
+# largest monthly changes, excluding 2020
+unemp_no_covid <- unemp |>
+  filter(year(date) != 2020)
+
+unemp_top_increases_no_covid <- unemp_no_covid |>
+  slice_max(unemployment_rate_change, n = 5)
+
+unemp_top_decreases_no_covid <- unemp_no_covid |>
+  slice_min(unemployment_rate_change, n = 5)
+```
+
+DATA: The data are monthly, seasonally adjusted unemployment rates for the United States and four states (Oregon, California, Texas, and New York). They come from FRED, the Federal Reserve Economic Data database maintained by the Federal Reserve Bank of St. Louis, and were downloaded in R with the `tidyquant` package's `tq_get()` function. The FRED series codes are `UNRATE` (U.S.), `ORUR` (Oregon), `CAUR` (California), `TXUR` (Texas), and `NYUR` (New York). Each series is observed monthly from `r format(min(unemp_raw$date), "%B %Y")` through `r format(max(unemp_raw$date), "%B %Y")`. The data are in long format, with one row per series per month: `symbol` is the series code, `date` is the month, and `price` is the unemployment rate (in percent).
+
+WRANGLING:
+
+### Summary statistics, full sample
+
+This table shows the mean, minimum, and maximum unemployment rate (in percent) for each region over the full sample, `r format(min(unemp$date), "%B %Y")` to `r format(max(unemp$date), "%B %Y")`. Over this period, `r unemp_summary |> slice_max(mean_rate) |> pull(region)` had the highest average unemployment rate and `r unemp_summary |> slice_min(mean_rate) |> pull(region)` had the lowest.
+
+```{r}
+unemp_summary |>
+  kable(
+    digits = 2,
+    col.names = c("Region", "Mean rate (%)", "Min rate (%)", "Max rate (%)"),
+    caption = "Unemployment rate summary statistics by region, full sample"
+  )
+```
+
+### Summary statistics, January 2015 onward
+
+This table repeats the same statistics using only observations from January 2015 onward. Over this shorter window, `r unemp_recent_summary |> slice_max(mean_rate) |> pull(region)` had the highest average unemployment rate and `r unemp_recent_summary |> slice_min(mean_rate) |> pull(region)` had the lowest.
+
+```{r}
+unemp_recent_summary |>
+  kable(
+    digits = 2,
+    col.names = c("Region", "Mean rate (%)", "Min rate (%)", "Max rate (%)"),
+    caption = "Unemployment rate summary statistics by region, January 2015 onward"
+  )
+```
+
+### Largest monthly increases, excluding 2020
+
+This table shows the region-months with the largest one-month increases in the unemployment rate (in percentage points), after dropping all observations from 2020 so that the extreme COVID-19 movements do not dominate. Ties are included, so the table can have more than five rows.
+
+```{r}
+unemp_top_increases_no_covid |>
+  select(region, date, unemployment_rate, unemployment_rate_change) |>
+  kable(
+    digits = 2,
+    col.names = c("Region", "Month", "Unemployment rate (%)", "Change from prior month (pp)"),
+    caption = "Largest month-over-month increases in the unemployment rate, excluding 2020"
+  )
+```
+
+### Largest monthly decreases, excluding 2020
+
+This table shows the region-months with the largest one-month decreases in the unemployment rate (in percentage points), again excluding 2020. Ties are included.
+
+```{r}
+unemp_top_decreases_no_covid |>
+  select(region, date, unemployment_rate, unemployment_rate_change) |>
+  kable(
+    digits = 2,
+    col.names = c("Region", "Month", "Unemployment rate (%)", "Change from prior month (pp)"),
+    caption = "Largest month-over-month decreases in the unemployment rate, excluding 2020"
+  )
+```
+
+VISUALIZATION:
+
+### Unemployment rates for all regions
+
+This figure plots the monthly unemployment rate for the United States and the four states on a single set of axes, with one colored line per region. It makes it easy to compare levels across regions and to see how the series move together, including the sharp spikes during recessions.
+
+```{r}
+ggplot(unemp, aes(x = date, y = unemployment_rate, color = region)) +
+  geom_line() +
+  labs(
+    title = "Monthly Unemployment Rates: U.S. and Selected States",
+    x = "Date",
+    y = "Unemployment Rate (%)",
+    color = "Region"
+  ) +
+  theme_minimal()
+```
+
+### Unemployment rates by region (separate panels)
+
+This figure shows the same data as the previous plot, but with a separate panel for each region. This avoids the overlapping lines and makes each region's own history easier to read.
+
+```{r}
+ggplot(unemp, aes(x = date, y = unemployment_rate)) +
+  geom_line() +
+  facet_wrap(~ region) +
+  labs(
+    title = "Monthly Unemployment Rates by Region",
+    x = "Date",
+    y = "Unemployment Rate (%)"
+  ) +
+  theme_minimal()
+```
+
+### Average unemployment rate by region
+
+This bar chart shows the mean unemployment rate over the full sample for each region, ordered from lowest to highest.
+
+```{r}
+ggplot(unemp_summary, aes(x = fct_reorder(region, mean_rate), y = mean_rate)) +
+  geom_col() +
+  labs(
+    title = "Average Unemployment Rate by Region",
+    x = "Region",
+    y = "Mean Unemployment Rate (%)"
+  ) +
+  theme_minimal()
+```
+
+### Oregon relative to the United States
+
+This plot shows Oregon's unemployment rate minus the U.S. unemployment rate over time. The dashed line at zero marks when the two rates are equal: values above it mean Oregon's unemployment was higher than the national rate, and values below it mean Oregon's was lower. I chose this plot to see how Oregon's labor market compares to the nation's, and whether the gap changes around recessions. \[REPLACE THIS BRACKET WITH ONE CONCRETE OBSERVATION FROM YOUR PLOT, e.g., when the gap was largest, or whether it is mostly above or below zero.\]
+
+```{r}
+oregon_gap <- unemp |>
+  filter(symbol %in% c("ORUR", "UNRATE")) |>
+  dplyr::select(date, symbol, unemployment_rate) |>
+  pivot_wider(names_from = symbol, values_from = unemployment_rate) |>
+  mutate(gap = ORUR - UNRATE)
+
+ggplot(oregon_gap, aes(x = date, y = gap)) +
+  geom_line() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Oregon Unemployment Rate Minus U.S. Rate",
+    x = "Date",
+    y = "Percentage Point Difference"
+  ) +
+  theme_minimal()
+```
+
+REFLECTION:
+
+The most straightforward part of this problem set was reading in the FRED data and using the dplyr verbs to filter, group, and summarize it, since the starter code made the structure clear. What tripped me up was an error when building the Oregon-versus-U.S. plot, where reshaping the data with `pivot_wider()` did not create the column I expected, and I had to track down the cause by checking the data directly. I also had to be careful to group by region before using `lag()` so that each region's changes were computed separately. One thing I feel more comfortable with now is committing and pushing to GitHub in stages due to my experience in cs projects. Overall, seeing the whole workflow from raw data to a finished report in one place helped me understand how the pieces fit together.
